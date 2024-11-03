@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import pydeck as pdk
-import plotly.graph_objects as go
 from datetime import datetime
 from meteostat import Point, Hourly
 import numpy as np
+import altair as alt
 
 # Set page config
 st.set_page_config(
@@ -70,8 +70,8 @@ def create_map_layer(df, current_index):
         "PathLayer",
         data=path_data,
         get_path="path",
-        width_scale=2,  # reduced from 20
-        width_min_pixels=1, # reduced from 2
+        width_scale=2,
+        width_min_pixels=1,
         get_color=[0, 0, 255],
         pickable=True,
         auto_highlight=True
@@ -84,7 +84,7 @@ def create_map_layer(df, current_index):
         data=current_pos,
         get_position=["Longitude", "Latitude"],
         get_color=[255, 0, 0],
-        get_radius=5, # reduced from 10
+        get_radius=5,
         pickable=True
     )
     
@@ -92,14 +92,11 @@ def create_map_layer(df, current_index):
 
 def create_deck(df, current_index):
     """Create PyDeck map view"""
-    # Calculate center point
     center_lat = df['Latitude'].mean()
     center_lon = df['Longitude'].mean()
     
-    # Create layers
     layers = create_map_layer(df, current_index)
     
-    # Create view state
     view_state = pdk.ViewState(
         latitude=center_lat,
         longitude=center_lon,
@@ -107,7 +104,6 @@ def create_deck(df, current_index):
         pitch=0
     )
     
-    # Create deck
     deck = pdk.Deck(
         layers=layers,
         initial_view_state=view_state,
@@ -117,67 +113,71 @@ def create_deck(df, current_index):
     return deck
 
 def create_performance_plot(df, current_index, weather_data=None):
-    """Create performance visualization plot using Plotly"""
-    fig = go.Figure()
+    """Create performance visualization plot using Altair"""
+    # Prepare the data for plotting
+    plot_df = pd.DataFrame({
+        'index': df.index,
+        'Speed': df['Speed'],
+        'LeanAngle': df['LeanAngle']
+    }).melt(id_vars=['index'], var_name='Metric', value_name='Value')
     
-    # Add Speed line
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['Speed'],
-        name='Speed (knots)',
-        line=dict(color='blue')
-    ))
+    # Create the base line chart
+    base = alt.Chart(plot_df).encode(
+        x=alt.X('index:Q', title='Time'),
+        y=alt.Y('Value:Q', title='Value'),
+        color='Metric:N'
+    )
     
-    # Add Lean Angle line
-    fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['LeanAngle'],
-        name='Lean Angle (degrees)',
-        line=dict(color='green')
-    ))
+    # Create the lines
+    lines = base.mark_line()
+    
+    # Create the vertical rule for current position
+    rule = alt.Chart(pd.DataFrame({'x': [current_index]})).mark_rule(
+        color='red',
+        strokeWidth=2
+    ).encode(
+        x='x:Q'
+    )
     
     # Add weather data if available
     if weather_data is not None and not weather_data.empty:
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=weather_data['wind_speed'].reindex(df.index, method='ffill'),
-            name='Wind Speed (m/s)',
-            line=dict(color='red', dash='dash')
-        ))
+        weather_df = pd.DataFrame({
+            'index': df.index,
+            'Metric': 'Wind Speed (m/s)',
+            'Value': weather_data['wind_speed'].reindex(df.index, method='ffill')
+        })
+        weather_line = alt.Chart(weather_df).mark_line(
+            strokeDash=[5, 5],
+            color='red'
+        ).encode(
+            x=alt.X('index:Q'),
+            y=alt.Y('Value:Q'),
+            color=alt.value('red')
+        )
+        chart = (lines + rule + weather_line).properties(
+            height=400
+        ).configure_axis(
+            grid=True
+        ).configure_view(
+            strokeWidth=0
+        )
+    else:
+        chart = (lines + rule).properties(
+            height=400
+        ).configure_axis(
+            grid=True
+        ).configure_view(
+            strokeWidth=0
+        )
     
-    # Add vertical line for current position
-    fig.add_vline(
-        x=current_index,
-        line_width=2,
-        line_color='red'
-    )
-    
-    # Update layout
-    fig.update_layout(
-        title='Performance Data',
-        xaxis_title='Time',
-        yaxis_title='Value',
-        height=400,
-        margin=dict(l=0, r=0, t=30, b=0),
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        ),
-        hovermode='x unified'
-    )
-    
-    return fig
+    return chart
 
 def main():
     st.title("⛵ SailPerfView")
     
-    # File upload
     uploaded_file = st.file_uploader("Upload CSV file", type=['csv'])
     
     if uploaded_file is not None:
-        # Load and validate data
         if st.session_state.data is None:
             df = load_data(uploaded_file)
             if df is not None:
@@ -186,26 +186,21 @@ def main():
         if st.session_state.data is not None:
             df = st.session_state.data
             
-            # Create tabs for visualizations
-            # tab1, tab2 = st.tabs(["Map View", "Performance Data"])
-            
-            # with tab1:
-                # Create and display map
+            # Create and display map
             deck = create_deck(df, st.session_state.current_index)
             st.pydeck_chart(deck)
             
-            # with tab2:
-                # Get weather data
+            # Get weather data
             weather_data = get_weather_data(
                 df['Latitude'].iloc[0],
                 df['Longitude'].iloc[0],
                 df['Time'].min(),
                 df['Time'].max()
             )
-                
-                # Create and display performance plot
-            fig = create_performance_plot(df, st.session_state.current_index, weather_data)
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # Create and display performance plot
+            chart = create_performance_plot(df, st.session_state.current_index, weather_data)
+            st.altair_chart(chart, use_container_width=True)
             
             # Display current metrics
             st.subheader("Current Metrics")
@@ -216,12 +211,8 @@ def main():
             cols[2].metric("Altitude", f"{current_data['Altitude']:.1f}m")
             cols[3].metric("Lap", int(current_data['Lap']))
             
-            # Create columns for controls
-            st.subheader("Playback Controls")
-            #col1, col2, col3, col4 = st.columns([1, 0.1, 0.1, 0.1])
-            
             # Timeline slider
-            #with col1:
+            st.subheader("Playback Controls")
             current_index = st.slider(
                 "Timeline",
                 0,
@@ -231,33 +222,6 @@ def main():
             if current_index != st.session_state.current_index:
                 st.session_state.current_index = current_index
                 st.rerun()
-            
-            # Control buttons
-            # with col2:
-            #    if st.button("⏮"):
-            #        st.session_state.current_index = max(0, st.session_state.current_index - 1)
-            #        st.rerun()
-            
-            #with col3:
-            #    play_button = st.button("▶" if not st.session_state.playing else "⏸")
-            #    if play_button:
-            #        st.session_state.playing = not st.session_state.playing
-            
-            #with col4:
-            #    if st.button("⏭"):
-            #        st.session_state.current_index = min(
-            #            len(df) - 1,
-            #            st.session_state.current_index + 1
-            #        )
-            #        st.rerun()
-            
-            # Auto-advance if playing
-            # if st.session_state.playing:
-            #    if st.session_state.current_index < len(df) - 1:
-            #        st.session_state.current_index += 1
-            #    else:
-            #        st.session_state.playing = False
-            #    st.rerun()
 
 if __name__ == "__main__":
     main()

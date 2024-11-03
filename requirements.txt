@@ -1,8 +1,7 @@
 streamlit
 pandas
 pydeck
-plotly.graph_objects
-plotly
 datetime
 meteostat
 numpy
+altair

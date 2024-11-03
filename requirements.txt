@@ -1,0 +1,8 @@
+streamlit
+pandas
+pydeck
+plotly.graphobjects
+plotly
+datetime
+meteostat
+numpy
